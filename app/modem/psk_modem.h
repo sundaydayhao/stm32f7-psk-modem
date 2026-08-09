@@ -1,0 +1,35 @@
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "psk_rtty.h"
+
+typedef enum {
+    PSK_MODE_BPSK31 = 0,
+    PSK_MODE_PSK63,
+} psk_mode_t;
+
+typedef struct {
+    psk_mode_t mode;
+    int sample_rate_hz;
+    int rx_tone_hz;
+    int squelch;
+} psk_modem_config_t;
+
+typedef struct {
+    psk_modem_config_t config;
+    psk_rtty_rx_t rx;
+    char *out;
+    size_t out_size;
+    size_t out_len;
+} psk_modem_t;
+
+void psk_modem_init(psk_modem_t *m, const psk_modem_config_t *config);
+void psk_modem_set_mode(psk_modem_t *m, psk_mode_t mode);
+void psk_modem_set_tone(psk_modem_t *m, int tone_hz);
+psk_mode_t psk_modem_mode(const psk_modem_t *m);
+int psk_modem_tone_hz(const psk_modem_t *m);
+const char *psk_modem_mode_name(psk_mode_t mode);
+size_t psk_modem_process(psk_modem_t *m, const int16_t *samples, size_t count,
+                         char *out, size_t out_size);
