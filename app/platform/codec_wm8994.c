@@ -1,6 +1,7 @@
 #include "codec_wm8994.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 #define WM8994_ADDR (0x34U)
 
@@ -45,10 +46,14 @@ HAL_StatusTypeDef codec_wm8994_init_line_in(I2C_HandleTypeDef *hi2c)
 
     HAL_Delay(10);
     for (size_t i = 0; i < sizeof(init) / sizeof(init[0]); ++i) {
-        if (codec_write(hi2c, init[i].reg, init[i].value) != HAL_OK) {
+        HAL_StatusTypeDef st = codec_write(hi2c, init[i].reg, init[i].value);
+        if (st != HAL_OK) {
+            printf("[audio] wm8994 write reg 0x%04x failed st=%d i2c_err=0x%08lx\r\n",
+                   init[i].reg, st, HAL_I2C_GetError(hi2c));
             return HAL_ERROR;
         }
         HAL_Delay(1);
     }
+    printf("[audio] wm8994 line-in register init ok\r\n");
     return HAL_OK;
 }

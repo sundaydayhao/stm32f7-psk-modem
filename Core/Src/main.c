@@ -1,5 +1,6 @@
 #include "main.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "audio_input.h"
@@ -14,14 +15,26 @@ LTDC_HandleTypeDef hltdc;
 DSI_HandleTypeDef hdsi;
 DMA2D_HandleTypeDef hdma2d;
 SDRAM_HandleTypeDef hsdram1;
+UART_HandleTypeDef huart1;
 
 static psk_modem_t g_modem;
 static char g_text[1024];
+static volatile uint8_t g_trace_ready;
+
+#define LCD_CLOCK_KHZ 27429U
+#define DSI_LANE_BYTE_CLOCK_KHZ 62500U
+#define LCD_HSA 2U
+#define LCD_HBP 34U
+#define LCD_HFP 34U
+#define LCD_VSA 1U
+#define LCD_VBP 15U
+#define LCD_VFP 16U
 
 void SystemClock_Config(void);
 void PeriphCommonClock_Config(void);
 static void MPU_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_I2C4_Init(void);
 static void MX_SAI1_Init(void);
 static void MX_LTDC_Init(void);
@@ -40,16 +53,24 @@ int main(void)
     PeriphCommonClock_Config();
 
     MX_GPIO_Init();
+    MX_USART1_UART_Init();
+    printf("\r\n[boot] stm32f7-psk-modem trace online\r\n");
     MX_I2C4_Init();
+    printf("[boot] i2c4 ok\r\n");
     MX_FMC_Init();
     SDRAM_Startup();
+    printf("[boot] sdram ok\r\n");
     MX_DMA2D_Init();
     MX_DSI_Init();
+    printf("[boot] dsi configured\r\n");
     MX_LTDC_Init();
+    printf("[boot] ltdc started\r\n");
     MX_SAI1_Init();
+    printf("[boot] sai1 ok\r\n");
 
-    display_init(&hltdc);
+    display_init(&hltdc, &hdsi);
     display_status("STM32F769I PSK modem", "Line IN -> WM8994 -> SAI1B DMA");
+    printf("[boot] lvgl/display init done\r\n");
 
     psk_modem_config_t cfg = {
         .mode = PSK_MODE_BPSK31,
@@ -59,8 +80,11 @@ int main(void)
     };
     psk_modem_init(&g_modem, &cfg);
 
-    if (audio_input_start(&hi2c4, &hsai_BlockB1) != HAL_OK) {
+    if (audio_input_start(&hi2c4, &hsai_BlockA1, &hsai_BlockB1) != HAL_OK) {
+        printf("[error] audio init failed\r\n");
         display_status("Audio init failed", "Check WM8994/I2C4/SAI1B");
+    } else {
+        printf("[boot] audio capture started\r\n");
     }
 
     int16_t samples[AUDIO_INPUT_DECODE_BLOCK_SAMPLES];
@@ -71,6 +95,7 @@ int main(void)
     while (1) {
         size_t count = audio_input_read(samples, AUDIO_INPUT_DECODE_BLOCK_SAMPLES);
         if (count == 0) {
+            display_task();
             continue;
         }
 
@@ -130,11 +155,11 @@ void PeriphCommonClock_Config(void)
 {
     RCC_PeriphCLKInitTypeDef pclk = {0};
     pclk.PeriphClockSelection = RCC_PERIPHCLK_LTDC | RCC_PERIPHCLK_SAI1;
-    pclk.PLLSAI.PLLSAIN = 192;
-    pclk.PLLSAI.PLLSAIR = 4;
+    pclk.PLLSAI.PLLSAIN = 384;
+    pclk.PLLSAI.PLLSAIR = 7;
     pclk.PLLSAI.PLLSAIQ = 2;
     pclk.PLLSAI.PLLSAIP = RCC_PLLSAIP_DIV4;
-    pclk.PLLSAIDivR = RCC_PLLSAIDIVR_4;
+    pclk.PLLSAIDivR = RCC_PLLSAIDIVR_2;
     pclk.Sai1ClockSelection = RCC_SAI1CLKSOURCE_PLLSAI;
     if (HAL_RCCEx_PeriphCLKConfig(&pclk) != HAL_OK) {
         Error_Handler();
@@ -163,7 +188,7 @@ static void MX_SAI1_Init(void)
 {
     hsai_BlockA1.Instance = SAI1_Block_A;
     hsai_BlockA1.Init.Protocol = SAI_FREE_PROTOCOL;
-    hsai_BlockA1.Init.AudioMode = SAI_MODEMASTER_TX;
+    hsai_BlockA1.Init.AudioMode = SAI_MODEMASTER_RX;
     hsai_BlockA1.Init.DataSize = SAI_DATASIZE_16;
     hsai_BlockA1.Init.FirstBit = SAI_FIRSTBIT_MSB;
     hsai_BlockA1.Init.ClockStrobing = SAI_CLOCKSTROBING_FALLINGEDGE;
@@ -181,33 +206,46 @@ static void MX_SAI1_Init(void)
     hsai_BlockA1.FrameInit.FSPolarity = SAI_FS_ACTIVE_LOW;
     hsai_BlockA1.FrameInit.FSOffset = SAI_FS_BEFOREFIRSTBIT;
     hsai_BlockA1.SlotInit.FirstBitOffset = 0;
-    hsai_BlockA1.SlotInit.SlotSize = SAI_SLOTSIZE_32B;
-    hsai_BlockA1.SlotInit.SlotNumber = 2;
-    hsai_BlockA1.SlotInit.SlotActive = SAI_SLOTACTIVE_0 | SAI_SLOTACTIVE_1;
+    hsai_BlockA1.SlotInit.SlotSize = SAI_SLOTSIZE_DATASIZE;
+    hsai_BlockA1.SlotInit.SlotNumber = 4;
+    hsai_BlockA1.SlotInit.SlotActive = SAI_SLOTACTIVE_0 | SAI_SLOTACTIVE_2;
     if (HAL_SAI_Init(&hsai_BlockA1) != HAL_OK) {
         Error_Handler();
     }
 
-    hsai_BlockB1 = hsai_BlockA1;
+    SAI_InitTypeDef sai1_common_init = hsai_BlockA1.Init;
+    SAI_FrameInitTypeDef sai1_common_frame = hsai_BlockA1.FrameInit;
+    SAI_SlotInitTypeDef sai1_common_slot = hsai_BlockA1.SlotInit;
+
+    memset(&hsai_BlockB1, 0, sizeof(hsai_BlockB1));
     hsai_BlockB1.Instance = SAI1_Block_B;
+    hsai_BlockB1.Init = sai1_common_init;
+    hsai_BlockB1.FrameInit = sai1_common_frame;
+    hsai_BlockB1.SlotInit = sai1_common_slot;
     hsai_BlockB1.Init.AudioMode = SAI_MODESLAVE_RX;
     hsai_BlockB1.Init.Synchro = SAI_SYNCHRONOUS;
+    hsai_BlockB1.Init.ClockStrobing = SAI_CLOCKSTROBING_RISINGEDGE;
     hsai_BlockB1.Init.OutputDrive = SAI_OUTPUTDRIVE_DISABLE;
+    hsai_BlockB1.Init.TriState = SAI_OUTPUT_RELEASED;
     if (HAL_SAI_Init(&hsai_BlockB1) != HAL_OK) {
         Error_Handler();
     }
+
 }
 
 static void MX_DSI_Init(void)
 {
     DSI_PLLInitTypeDef pll = {0};
+    DSI_VidCfgTypeDef video = {0};
+
     hdsi.Instance = DSI;
     hdsi.Init.AutomaticClockLaneControl = DSI_AUTO_CLK_LANE_CTRL_DISABLE;
     hdsi.Init.TXEscapeCkdiv = 4;
     hdsi.Init.NumberOfLanes = DSI_TWO_DATA_LANES;
-    pll.PLLNDIV = 20;
-    pll.PLLIDF = DSI_PLL_IN_DIV1;
+    pll.PLLNDIV = 100;
+    pll.PLLIDF = DSI_PLL_IN_DIV5;
     pll.PLLODF = DSI_PLL_OUT_DIV1;
+
     HAL_GPIO_WritePin(DSI_RESET_GPIO_Port, DSI_RESET_Pin, GPIO_PIN_RESET);
     HAL_Delay(10);
     HAL_GPIO_WritePin(DSI_RESET_GPIO_Port, DSI_RESET_Pin, GPIO_PIN_SET);
@@ -215,6 +253,67 @@ static void MX_DSI_Init(void)
     if (HAL_DSI_Init(&hdsi, &pll) != HAL_OK) {
         Error_Handler();
     }
+
+    video.VirtualChannelID = 0;
+    video.ColorCoding = DSI_RGB888;
+    video.VSPolarity = DSI_VSYNC_ACTIVE_HIGH;
+    video.HSPolarity = DSI_HSYNC_ACTIVE_HIGH;
+    video.DEPolarity = DSI_DATA_ENABLE_ACTIVE_HIGH;
+    video.Mode = DSI_VID_MODE_BURST;
+    video.NullPacketSize = 0xFFF;
+    video.NumberOfChunks = 0;
+    video.PacketSize = DISPLAY_WIDTH;
+    video.HorizontalSyncActive = (LCD_HSA * DSI_LANE_BYTE_CLOCK_KHZ) / LCD_CLOCK_KHZ;
+    video.HorizontalBackPorch = (LCD_HBP * DSI_LANE_BYTE_CLOCK_KHZ) / LCD_CLOCK_KHZ;
+    video.HorizontalLine = ((DISPLAY_WIDTH + LCD_HSA + LCD_HBP + LCD_HFP) *
+                            DSI_LANE_BYTE_CLOCK_KHZ) / LCD_CLOCK_KHZ;
+    video.VerticalSyncActive = LCD_VSA;
+    video.VerticalBackPorch = LCD_VBP;
+    video.VerticalFrontPorch = LCD_VFP;
+    video.VerticalActive = DISPLAY_HEIGHT;
+    video.LPCommandEnable = DSI_LP_COMMAND_ENABLE;
+    video.LPLargestPacketSize = 16;
+    video.LPVACTLargestPacketSize = 0;
+    video.LPHorizontalFrontPorchEnable = DSI_LP_HFP_ENABLE;
+    video.LPHorizontalBackPorchEnable = DSI_LP_HBP_ENABLE;
+    video.LPVerticalActiveEnable = DSI_LP_VACT_ENABLE;
+    video.LPVerticalFrontPorchEnable = DSI_LP_VFP_ENABLE;
+    video.LPVerticalBackPorchEnable = DSI_LP_VBP_ENABLE;
+    video.LPVerticalSyncActiveEnable = DSI_LP_VSYNC_ENABLE;
+    video.FrameBTAAcknowledgeEnable = DSI_FBTAA_DISABLE;
+    if (HAL_DSI_ConfigVideoMode(&hdsi, &video) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+static void MX_USART1_UART_Init(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_USART1_CLK_ENABLE();
+
+    gpio.Pin = VCP_TX_Pin | VCP_RX_Pin;
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pull = GPIO_PULLUP;
+    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    gpio.Alternate = GPIO_AF7_USART1;
+    HAL_GPIO_Init(GPIOA, &gpio);
+
+    huart1.Instance = USART1;
+    huart1.Init.BaudRate = 115200;
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits = UART_STOPBITS_1;
+    huart1.Init.Parity = UART_PARITY_NONE;
+    huart1.Init.Mode = UART_MODE_TX_RX;
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+    huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+    huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+    if (HAL_UART_Init(&huart1) != HAL_OK) {
+        Error_Handler();
+    }
+    g_trace_ready = 1;
 }
 
 static void MX_LTDC_Init(void)
@@ -225,14 +324,17 @@ static void MX_LTDC_Init(void)
     hltdc.Init.VSPolarity = LTDC_VSPOLARITY_AL;
     hltdc.Init.DEPolarity = LTDC_DEPOLARITY_AL;
     hltdc.Init.PCPolarity = LTDC_PCPOLARITY_IPC;
-    hltdc.Init.HorizontalSync = 1;
-    hltdc.Init.VerticalSync = 1;
-    hltdc.Init.AccumulatedHBP = 2;
-    hltdc.Init.AccumulatedVBP = 2;
-    hltdc.Init.AccumulatedActiveW = 802;
-    hltdc.Init.AccumulatedActiveH = 482;
-    hltdc.Init.TotalWidth = 803;
-    hltdc.Init.TotalHeigh = 483;
+    hltdc.Init.HorizontalSync = LCD_HSA - 1U;
+    hltdc.Init.VerticalSync = LCD_VSA - 1U;
+    hltdc.Init.AccumulatedHBP = LCD_HSA + LCD_HBP - 1U;
+    hltdc.Init.AccumulatedVBP = LCD_VSA + LCD_VBP - 1U;
+    hltdc.Init.AccumulatedActiveW = DISPLAY_WIDTH + LCD_HSA + LCD_HBP - 1U;
+    hltdc.Init.AccumulatedActiveH = DISPLAY_HEIGHT + LCD_VSA + LCD_VBP - 1U;
+    hltdc.Init.TotalWidth = DISPLAY_WIDTH + LCD_HSA + LCD_HBP + LCD_HFP - 1U;
+    hltdc.Init.TotalHeigh = DISPLAY_HEIGHT + LCD_VSA + LCD_VBP + LCD_VFP - 1U;
+    hltdc.Init.Backcolor.Blue = 0;
+    hltdc.Init.Backcolor.Green = 0;
+    hltdc.Init.Backcolor.Red = 0;
     if (HAL_LTDC_Init(&hltdc) != HAL_OK) {
         Error_Handler();
     }
@@ -248,6 +350,9 @@ static void MX_LTDC_Init(void)
     layer.ImageWidth = DISPLAY_WIDTH;
     layer.ImageHeight = DISPLAY_HEIGHT;
     if (HAL_LTDC_ConfigLayer(&hltdc, &layer, 0) != HAL_OK) {
+        Error_Handler();
+    }
+    if (HAL_DSI_Start(&hdsi) != HAL_OK) {
         Error_Handler();
     }
 }
@@ -360,9 +465,26 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 void Error_Handler(void)
 {
+    if (g_trace_ready) {
+        printf("[fatal] Error_Handler\r\n");
+    }
     __disable_irq();
     while (1) {
     }
+}
+
+int __io_putchar(int ch)
+{
+    uint8_t c = (uint8_t)ch;
+    if (!g_trace_ready) {
+        return ch;
+    }
+    if (ch == '\n') {
+        uint8_t cr = '\r';
+        HAL_UART_Transmit(&huart1, &cr, 1, 10);
+    }
+    HAL_UART_Transmit(&huart1, &c, 1, 10);
+    return ch;
 }
 
 #ifdef USE_FULL_ASSERT

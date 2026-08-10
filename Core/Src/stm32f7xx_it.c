@@ -18,7 +18,7 @@ void TIM6_DAC_IRQHandler(void)
     HAL_TIM_IRQHandler(&htim6);
 }
 
-void DMA2_Stream5_IRQHandler(void)
+void DMA2_Stream4_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&hdma_sai1_b_rx);
 }

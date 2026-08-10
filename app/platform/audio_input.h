@@ -10,5 +10,5 @@
 #define AUDIO_INPUT_DECIMATION 6
 #define AUDIO_INPUT_DECODE_BLOCK_SAMPLES 128
 
-HAL_StatusTypeDef audio_input_start(I2C_HandleTypeDef *hi2c, SAI_HandleTypeDef *hsai_rx);
+HAL_StatusTypeDef audio_input_start(I2C_HandleTypeDef *hi2c, SAI_HandleTypeDef *hsai_clk, SAI_HandleTypeDef *hsai_rx);
 size_t audio_input_read(int16_t *out, size_t max_samples);

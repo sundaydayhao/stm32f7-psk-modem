@@ -19,6 +19,7 @@ extern "C" {
 #define HAL_SAI_MODULE_ENABLED
 #define HAL_SDRAM_MODULE_ENABLED
 #define HAL_TIM_MODULE_ENABLED
+#define HAL_UART_MODULE_ENABLED
 
 #if !defined(HSE_VALUE)
 #define HSE_VALUE 25000000U
@@ -96,6 +97,9 @@ extern "C" {
 #endif
 #ifdef HAL_TIM_MODULE_ENABLED
 #include "stm32f7xx_hal_tim.h"
+#endif
+#ifdef HAL_UART_MODULE_ENABLED
+#include "stm32f7xx_hal_uart.h"
 #endif
 
 #ifdef USE_FULL_ASSERT

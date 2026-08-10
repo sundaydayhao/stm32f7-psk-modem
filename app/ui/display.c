@@ -3,128 +3,229 @@
 #include <stdio.h>
 #include <string.h>
 
-static volatile uint16_t *const fb = (volatile uint16_t *)DISPLAY_FRAMEBUFFER;
+#include "main.h"
+#include "lvgl.h"
+#include "otm8009a.h"
 
-#define C_BG     0x0841U
-#define C_PANEL  0x18E3U
-#define C_GRID   0x39E7U
-#define C_TEXT   0xFFFFU
-#define C_ACCENT 0x07FFU
-#define C_BAR    0xFCA0U
+#define C_BG      0x101418U
+#define C_PANEL   0x1D252CU
+#define C_TEXT    0xF1F5F9U
+#define C_MUTED   0x94A3B8U
+#define C_ACCENT  0x22D3EEU
+#define C_WARN    0xF59E0BU
 
-typedef struct {
-    char c;
-    uint8_t col[5];
-} glyph_t;
+#define LCD_DSI_ID 0U
+#define LCD_CLOCK_KHZ 27429U
+#define DSI_LANE_BYTE_CLOCK_KHZ 62500U
 
-static const glyph_t glyphs[] = {
-    {' ', {0,0,0,0,0}}, {'-', {8,8,8,8,8}}, {'.', {0,0,0,0,64}}, {':', {0,0,20,0,0}},
-    {'/', {64,32,16,8,4}}, {'>', {0,34,20,8,0}}, {'0', {62,81,73,69,62}},
-    {'1', {0,66,127,64,0}}, {'2', {98,81,73,73,70}}, {'3', {34,65,73,73,54}},
-    {'4', {24,20,18,127,16}}, {'5', {39,69,69,69,57}}, {'6', {60,74,73,73,48}},
-    {'7', {1,113,9,5,3}}, {'8', {54,73,73,73,54}}, {'9', {6,73,73,41,30}},
-    {'A', {126,9,9,9,126}}, {'B', {127,73,73,73,54}}, {'C', {62,65,65,65,34}},
-    {'D', {127,65,65,34,28}}, {'E', {127,73,73,73,65}}, {'F', {127,9,9,9,1}},
-    {'G', {62,65,73,73,122}}, {'H', {127,8,8,8,127}}, {'I', {0,65,127,65,0}},
-    {'J', {32,64,65,63,1}}, {'K', {127,8,20,34,65}}, {'L', {127,64,64,64,64}},
-    {'M', {127,2,12,2,127}}, {'N', {127,4,8,16,127}}, {'O', {62,65,65,65,62}},
-    {'P', {127,9,9,9,6}}, {'Q', {62,65,81,33,94}}, {'R', {127,9,25,41,70}},
-    {'S', {70,73,73,73,49}}, {'T', {1,1,127,1,1}}, {'U', {63,64,64,64,63}},
-    {'V', {31,32,64,32,31}}, {'W', {127,32,24,32,127}}, {'X', {99,20,8,20,99}},
-    {'Y', {7,8,112,8,7}}, {'Z', {97,81,73,69,67}},
-};
+#define HSA 1U
+#define HBP 15U
+#define HFP 16U
+#define VSA 2U
+#define VBP 34U
+#define VFP 34U
 
-static void put_px(int x, int y, uint16_t color)
+static DSI_HandleTypeDef *g_hdsi;
+static lv_disp_draw_buf_t g_draw_buf;
+static lv_color_t g_line_buf[DISPLAY_WIDTH * 40U];
+
+static lv_obj_t *g_screen;
+static lv_obj_t *g_title;
+static lv_obj_t *g_subtitle;
+static lv_obj_t *g_mode;
+static lv_obj_t *g_tone;
+static lv_obj_t *g_peak;
+static lv_obj_t *g_decoded;
+static lv_obj_t *g_bars[SPECTRUM_BINS];
+
+static void lv_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p)
 {
-    if ((unsigned)x < DISPLAY_WIDTH && (unsigned)y < DISPLAY_HEIGHT) {
-        fb[(uint32_t)y * DISPLAY_WIDTH + (uint32_t)x] = color;
+    uint16_t *fb = (uint16_t *)DISPLAY_FRAMEBUFFER;
+    int32_t width = area->x2 - area->x1 + 1;
+
+    for (int32_t y = area->y1; y <= area->y2; ++y) {
+        uint16_t *dst = fb + ((uint32_t)y * DISPLAY_WIDTH) + (uint32_t)area->x1;
+        memcpy(dst, color_p, (size_t)width * sizeof(uint16_t));
+        color_p += width;
     }
+
+    lv_disp_flush_ready(disp_drv);
 }
 
-static void fill_rect(int x, int y, int w, int h, uint16_t color)
+static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color)
 {
-    for (int yy = y; yy < y + h; ++yy) {
-        for (int xx = x; xx < x + w; ++xx) {
-            put_px(xx, yy, color);
-        }
-    }
+    lv_obj_t *label = lv_label_create(parent);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, color, 0);
+    lv_obj_set_style_bg_opa(label, LV_OPA_TRANSP, 0);
+    return label;
 }
 
-static const uint8_t *glyph_for(char c)
+static lv_obj_t *make_panel(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
 {
-    if (c >= 'a' && c <= 'z') {
-        c = (char)(c - 'a' + 'A');
-    }
-    for (size_t i = 0; i < sizeof(glyphs) / sizeof(glyphs[0]); ++i) {
-        if (glyphs[i].c == c) {
-            return glyphs[i].col;
-        }
-    }
-    return glyphs[0].col;
+    lv_obj_t *panel = lv_obj_create(parent);
+    lv_obj_set_pos(panel, x, y);
+    lv_obj_set_size(panel, w, h);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(C_PANEL), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 4, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    return panel;
 }
 
-static void draw_char(int x, int y, char c, uint16_t color, int scale)
+static void create_ui(void)
 {
-    const uint8_t *g = glyph_for(c);
-    for (int col = 0; col < 5; ++col) {
-        for (int row = 0; row < 7; ++row) {
-            if (g[col] & (1U << row)) {
-                fill_rect(x + col * scale, y + row * scale, scale, scale, color);
-            }
-        }
+    g_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(g_screen, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_opa(g_screen, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(g_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_title = make_label(g_screen, &lv_font_montserrat_24, lv_color_hex(C_TEXT));
+    lv_obj_set_pos(g_title, 18, 12);
+    lv_label_set_text(g_title, "STM32F769I PSK Modem");
+
+    g_subtitle = make_label(g_screen, &lv_font_montserrat_14, lv_color_hex(C_MUTED));
+    lv_obj_set_pos(g_subtitle, 20, 44);
+    lv_label_set_text(g_subtitle, "LVGL display active");
+
+    lv_obj_t *status = make_panel(g_screen, 18, 72, 764, 54);
+    g_mode = make_label(status, &lv_font_montserrat_20, lv_color_hex(C_ACCENT));
+    lv_obj_set_pos(g_mode, 18, 15);
+    g_tone = make_label(status, &lv_font_montserrat_16, lv_color_hex(C_TEXT));
+    lv_obj_set_pos(g_tone, 170, 18);
+    g_peak = make_label(status, &lv_font_montserrat_16, lv_color_hex(C_TEXT));
+    lv_obj_set_pos(g_peak, 360, 18);
+
+    lv_obj_t *spectrum_panel = make_panel(g_screen, 18, 144, 764, 166);
+    const lv_coord_t bar_w = 8;
+    const lv_coord_t gap = 4;
+    const lv_coord_t x0 = 15;
+    for (int i = 0; i < SPECTRUM_BINS; ++i) {
+        lv_obj_t *bar = lv_bar_create(spectrum_panel);
+        lv_obj_set_size(bar, bar_w, 132);
+        lv_obj_set_pos(bar, x0 + i * (bar_w + gap), 17);
+        lv_bar_set_range(bar, 0, 255);
+        lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(0x26313AU), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(bar, 2, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(C_WARN), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(bar, 2, LV_PART_INDICATOR);
+        g_bars[i] = bar;
     }
+
+    lv_obj_t *text_panel = make_panel(g_screen, 18, 328, 764, 134);
+    g_decoded = make_label(text_panel, &lv_font_montserrat_16, lv_color_hex(C_TEXT));
+    lv_obj_set_pos(g_decoded, 16, 14);
+    lv_obj_set_size(g_decoded, 732, 108);
+    lv_label_set_long_mode(g_decoded, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(g_decoded, "Waiting for PSK signal");
+
+    lv_scr_load(g_screen);
 }
 
-static void draw_text(int x, int y, const char *text, uint16_t color, int scale, int max_w)
+static void panel_init(void)
 {
-    int cx = x;
-    int cy = y;
-    const int step = 6 * scale;
-    while (*text && cy < (int)DISPLAY_HEIGHT - 8 * scale) {
-        if (*text == '\n' || cx + step > x + max_w) {
-            cx = x;
-            cy += 9 * scale;
-            if (*text == '\n') {
-                ++text;
-            }
-            continue;
-        }
-        draw_char(cx, cy, *text++, color, scale);
-        cx += step;
-    }
+    printf("[display] otm8009a init begin\r\n");
+    OTM8009A_Init(OTM8009A_FORMAT_RGB888, OTM8009A_ORIENTATION_LANDSCAPE);
+    printf("[display] otm8009a init done\r\n");
+    HAL_DSI_ShortWrite(g_hdsi, LCD_DSI_ID, DSI_DCS_SHORT_PKT_WRITE_P1,
+                       OTM8009A_CMD_DISPON, 0x00);
+    printf("[display] display on command sent\r\n");
+    HAL_GPIO_WritePin(LCD_BL_CTRL_GPIO_Port, LCD_BL_CTRL_Pin, GPIO_PIN_SET);
+    printf("[display] backlight enabled\r\n");
 }
 
-void display_init(LTDC_HandleTypeDef *hltdc)
+void display_init(LTDC_HandleTypeDef *hltdc, DSI_HandleTypeDef *hdsi)
 {
     (void)hltdc;
-    fill_rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, C_BG);
+    g_hdsi = hdsi;
+
+    printf("[display] init begin\r\n");
+    panel_init();
+
+    printf("[display] lv_init begin\r\n");
+    lv_init();
+    lv_disp_draw_buf_init(&g_draw_buf, g_line_buf, NULL,
+                          DISPLAY_WIDTH * 40U);
+
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = DISPLAY_WIDTH;
+    disp_drv.ver_res = DISPLAY_HEIGHT;
+    disp_drv.flush_cb = lv_flush;
+    disp_drv.draw_buf = &g_draw_buf;
+    lv_disp_drv_register(&disp_drv);
+
+    create_ui();
+    printf("[display] lvgl ui created\r\n");
+    lv_refr_now(NULL);
+    printf("[display] first refresh done\r\n");
+}
+
+void display_task(void)
+{
+    lv_timer_handler();
 }
 
 void display_status(const char *line1, const char *line2)
 {
-    fill_rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, C_BG);
-    draw_text(24, 24, line1, C_TEXT, 3, 740);
-    draw_text(24, 64, line2, C_ACCENT, 2, 740);
+    lv_label_set_text(g_title, line1 ? line1 : "");
+    lv_label_set_text(g_subtitle, line2 ? line2 : "");
+    lv_label_set_text(g_mode, "STATUS");
+    lv_label_set_text(g_tone, "");
+    lv_label_set_text(g_peak, "");
+    lv_label_set_text(g_decoded, line2 ? line2 : "");
+    lv_refr_now(NULL);
 }
 
 void display_render(const spectrum_t *spectrum, const char *mode, int tone_hz, const char *decoded)
 {
-    char header[64];
-    snprintf(header, sizeof(header), "%s  TONE %d HZ  PEAK %d HZ", mode, tone_hz, spectrum->peak_hz);
+    char text[64];
 
-    fill_rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, C_BG);
-    draw_text(16, 12, header, C_TEXT, 2, 760);
+    lv_label_set_text(g_title, "STM32F769I PSK Modem");
+    lv_label_set_text(g_subtitle, "Line IN -> WM8994 -> SAI1B DMA");
+    lv_label_set_text(g_mode, mode ? mode : "PSK");
 
-    fill_rect(16, 58, 768, 210, C_PANEL);
-    for (int y = 0; y <= 4; ++y) {
-        fill_rect(16, 58 + y * 52, 768, 1, C_GRID);
-    }
+    snprintf(text, sizeof(text), "Tone %d Hz", tone_hz);
+    lv_label_set_text(g_tone, text);
+
+    snprintf(text, sizeof(text), "Peak %d Hz", spectrum->peak_hz);
+    lv_label_set_text(g_peak, text);
+
     for (int i = 0; i < SPECTRUM_BINS; ++i) {
-        int h = (spectrum->bins[i] * 190) / 255;
-        int x = 20 + i * 12;
-        fill_rect(x, 256 - h, 8, h, (i == spectrum->peak_bin) ? C_ACCENT : C_BAR);
+        lv_bar_set_value(g_bars[i], spectrum->bins[i], LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(g_bars[i],
+                                  lv_color_hex(i == spectrum->peak_bin ? C_ACCENT : C_WARN),
+                                  LV_PART_INDICATOR);
     }
 
-    fill_rect(16, 288, 768, 176, C_PANEL);
-    draw_text(24, 300, decoded && decoded[0] ? decoded : "WAITING FOR PSK SIGNAL", C_TEXT, 2, 740);
+    lv_label_set_text(g_decoded, decoded && decoded[0] ? decoded : "Waiting for PSK signal");
+    display_task();
+}
+
+void DSI_IO_WriteCmd(uint32_t nbr_params, uint8_t *params)
+{
+    printf("[display] dsi cmd 0x%02x len %lu\r\n", params[0], nbr_params);
+    if (nbr_params <= 1U) {
+        HAL_DSI_ShortWrite(g_hdsi, LCD_DSI_ID, DSI_DCS_SHORT_PKT_WRITE_P1,
+                           params[0], params[1]);
+    } else {
+        HAL_DSI_LongWrite(g_hdsi, LCD_DSI_ID, DSI_DCS_LONG_PKT_WRITE,
+                          nbr_params, params[nbr_params], params);
+    }
+}
+
+int32_t DSI_IO_ReadCmd(uint32_t reg, uint8_t *data, uint32_t size)
+{
+    return HAL_DSI_Read(g_hdsi, LCD_DSI_ID, data, size,
+                        DSI_DCS_SHORT_PKT_READ, reg, data) == HAL_OK ? 0 : -1;
+}
+
+void OTM8009A_IO_Delay(uint32_t delay)
+{
+    HAL_Delay(delay);
 }

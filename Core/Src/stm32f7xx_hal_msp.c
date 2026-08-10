@@ -1,5 +1,7 @@
 #include "main.h"
 
+#include <stdio.h>
+
 DMA_HandleTypeDef hdma_sai1_b_rx;
 
 void HAL_MspInit(void)
@@ -62,8 +64,8 @@ void HAL_SAI_MspInit(SAI_HandleTypeDef *hsai)
         gpio.Alternate = GPIO_AF6_SAI1;
         HAL_GPIO_Init(SAI1_SDB_GPIO_Port, &gpio);
 
-        hdma_sai1_b_rx.Instance = DMA2_Stream5;
-        hdma_sai1_b_rx.Init.Channel = DMA_CHANNEL_0;
+        hdma_sai1_b_rx.Instance = DMA2_Stream4;
+        hdma_sai1_b_rx.Init.Channel = DMA_CHANNEL_1;
         hdma_sai1_b_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
         hdma_sai1_b_rx.Init.PeriphInc = DMA_PINC_DISABLE;
         hdma_sai1_b_rx.Init.MemInc = DMA_MINC_ENABLE;
@@ -71,13 +73,23 @@ void HAL_SAI_MspInit(SAI_HandleTypeDef *hsai)
         hdma_sai1_b_rx.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
         hdma_sai1_b_rx.Init.Mode = DMA_CIRCULAR;
         hdma_sai1_b_rx.Init.Priority = DMA_PRIORITY_VERY_HIGH;
-        hdma_sai1_b_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
-        if (HAL_DMA_Init(&hdma_sai1_b_rx) != HAL_OK) {
+        hdma_sai1_b_rx.Init.FIFOMode = DMA_FIFOMODE_ENABLE;
+        hdma_sai1_b_rx.Init.FIFOThreshold = DMA_FIFO_THRESHOLD_FULL;
+        hdma_sai1_b_rx.Init.MemBurst = DMA_MBURST_SINGLE;
+        hdma_sai1_b_rx.Init.PeriphBurst = DMA_PBURST_SINGLE;
+        HAL_StatusTypeDef dma_st = HAL_DMA_Init(&hdma_sai1_b_rx);
+        printf("[audio] sai1b dma init st=%d state=%lu err=0x%08lx cr=0x%08lx fcr=0x%08lx\r\n",
+               dma_st,
+               (uint32_t)hdma_sai1_b_rx.State,
+               HAL_DMA_GetError(&hdma_sai1_b_rx),
+               hdma_sai1_b_rx.Instance->CR,
+               hdma_sai1_b_rx.Instance->FCR);
+        if (dma_st != HAL_OK) {
             Error_Handler();
         }
         __HAL_LINKDMA(hsai, hdmarx, hdma_sai1_b_rx);
-        HAL_NVIC_SetPriority(DMA2_Stream5_IRQn, 5, 0);
-        HAL_NVIC_EnableIRQ(DMA2_Stream5_IRQn);
+        HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 5, 0);
+        HAL_NVIC_EnableIRQ(DMA2_Stream4_IRQn);
     }
 }
 

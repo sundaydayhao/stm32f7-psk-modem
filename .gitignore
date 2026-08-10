@@ -1,4 +1,7 @@
 build/
+.toolchain/
+.magic-lamp-cache/
+downloads/
 *.elf
 *.map
 *.bin

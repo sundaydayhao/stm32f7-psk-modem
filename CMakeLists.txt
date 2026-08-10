@@ -7,6 +7,26 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 project(stm32f769i_disco_psk_modem C ASM)
 
+file(GLOB_RECURSE LVGL_SRC CONFIGURE_DEPENDS
+    third_party/lvgl/src/*.c
+)
+
+add_library(lvgl STATIC ${LVGL_SRC})
+target_compile_definitions(lvgl PUBLIC
+    LV_CONF_INCLUDE_SIMPLE
+    USE_HAL_DRIVER
+    STM32F769xx
+)
+target_include_directories(lvgl PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/third_party/lvgl
+    ${CMAKE_SOURCE_DIR}/Core/Inc
+    ${CMAKE_SOURCE_DIR}/Drivers/STM32F7xx_HAL_Driver/Inc
+    ${CMAKE_SOURCE_DIR}/Drivers/STM32F7xx_HAL_Driver/Inc/Legacy
+    ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Device/ST/STM32F7xx/Include
+    ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Include
+)
+
 add_executable(${PROJECT_NAME})
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -32,6 +52,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     app/platform
     app/ui
     third_party/psk_rtty/include
+    third_party/otm8009a
     Drivers/STM32F7xx_HAL_Driver/Inc
     Drivers/STM32F7xx_HAL_Driver/Inc/Legacy
     Drivers/CMSIS/Device/ST/STM32F7xx/Include
@@ -58,6 +79,9 @@ set(HAL_SRC
     Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_sai_ex.c
     Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_sdram.c
     Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_tim.c
+    Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_tim_ex.c
+    Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_uart.c
+    Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_uart_ex.c
     Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_fmc.c
 )
 
@@ -76,6 +100,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     app/platform/codec_wm8994.c
     app/ui/display.c
     third_party/psk_rtty/psk_rtty.c
+    third_party/otm8009a/otm8009a.c
     ${HAL_SRC}
 )
 
@@ -87,7 +112,7 @@ target_link_options(${PROJECT_NAME} PRIVATE
     --specs=nano.specs
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE m)
+target_link_libraries(${PROJECT_NAME} PRIVATE lvgl m)
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${PROJECT_NAME}>
