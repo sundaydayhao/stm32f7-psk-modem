@@ -21,6 +21,16 @@ static psk_modem_t g_modem;
 static char g_text[1024];
 static volatile uint8_t g_trace_ready;
 
+#define PCM_DUMP_ENABLE 0
+#define PCM_DUMP_SAMPLES 65536U
+#define PCM_DUMP_LINE_SAMPLES 32U
+#define AUDIO_ACTIVE_START_ABS_AVG 500U
+#define AUDIO_ACTIVE_HOLD_BLOCKS 64U
+
+#if PCM_DUMP_ENABLE
+static int16_t g_pcm_dump[PCM_DUMP_SAMPLES];
+#endif
+
 #define LCD_CLOCK_KHZ 27429U
 #define DSI_LANE_BYTE_CLOCK_KHZ 62500U
 #define LCD_HSA 2U
@@ -42,6 +52,12 @@ static void MX_DSI_Init(void);
 static void MX_DMA2D_Init(void);
 static void MX_FMC_Init(void);
 static void SDRAM_Startup(void);
+static void print_rx_text(const char *tag, const char *text, size_t len);
+static uint32_t block_abs_avg(const int16_t *samples, size_t count);
+#if PCM_DUMP_ENABLE
+static void pcm_dump_collect(const int16_t *samples, size_t count, uint8_t audio_active);
+static void pcm_dump_print(void);
+#endif
 
 int main(void)
 {
@@ -75,46 +91,274 @@ int main(void)
     psk_modem_config_t cfg = {
         .mode = PSK_MODE_BPSK31,
         .sample_rate_hz = AUDIO_INPUT_DECODE_RATE_HZ,
-        .rx_tone_hz = 1500,
-        .squelch = 35,
+        .rx_tone_hz = 1526,
+        .squelch = 5,
     };
     psk_modem_init(&g_modem, &cfg);
 
+    uint8_t audio_started = 0;
     if (audio_input_start(&hi2c4, &hsai_BlockA1, &hsai_BlockB1) != HAL_OK) {
         printf("[error] audio init failed\r\n");
         display_status("Audio init failed", "Check WM8994/I2C4/SAI1B");
     } else {
+        audio_started = 1;
         printf("[boot] audio capture started\r\n");
     }
 
     int16_t samples[AUDIO_INPUT_DECODE_BLOCK_SAMPLES];
     char decoded[96];
+    char diag_line[96];
     spectrum_t spectrum;
+    audio_input_debug_t audio_debug;
+    psk_modem_debug_t modem_debug;
+    uint32_t last_diag_tick = 0;
+    uint32_t last_diag_blocks = 0;
+    uint32_t last_render_tick = 0;
+    uint32_t last_audio_block_tick = 0;
+    uint8_t decoder_active = 0;
+    uint8_t active_hold_blocks = 0;
     g_text[0] = '\0';
+    memset(&spectrum, 0, sizeof(spectrum));
 
     while (1) {
         size_t count = audio_input_read(samples, AUDIO_INPUT_DECODE_BLOCK_SAMPLES);
         if (count == 0) {
+            uint32_t now = HAL_GetTick();
+            if ((uint32_t)(now - last_diag_tick) >= 2000U) {
+                last_diag_tick = now;
+                audio_input_debug_snapshot(&audio_debug);
+                psk_modem_debug_snapshot(&g_modem, &modem_debug);
+                printf("[diag] idle h=%lu f=%lu err=%lu blocks=%lu(+%lu) q=%lu maxq=%lu ovf=%lu empty=%lu count=%lu lane=%u min=%d max=%d abs_avg=%u raw0=%d/%d/%u raw1=%d/%d/%u peak=%dHz psk sq=%d/%d open=%d stable=%d warm=%d sym=%lu bits=%lu 1/0=%lu/%lu delim=%lu chars=%lu unk=%lu sai_err=0x%08lx dma_err=0x%08lx ndtr=%lu\r\n",
+                       audio_debug.half_callbacks,
+                       audio_debug.full_callbacks,
+                       audio_debug.error_callbacks,
+                       audio_debug.read_blocks,
+                       audio_debug.read_blocks - last_diag_blocks,
+                       audio_debug.queued_blocks,
+                       audio_debug.max_queued_blocks,
+                       audio_debug.overflow_blocks,
+                       audio_debug.empty_reads,
+                       audio_debug.last_count,
+                       audio_debug.selected_lane,
+                       audio_debug.last_min,
+                       audio_debug.last_max,
+                       audio_debug.last_abs_avg,
+                       audio_debug.raw_min[0],
+                       audio_debug.raw_max[0],
+                       audio_debug.raw_abs_avg[0],
+                       audio_debug.raw_min[1],
+                       audio_debug.raw_max[1],
+                       audio_debug.raw_abs_avg[1],
+                       spectrum.peak_hz,
+                       modem_debug.sq_level,
+                       modem_debug.sq_thresh,
+                       modem_debug.sq_open,
+                       modem_debug.stable_symbols,
+                       modem_debug.warmup_symbols,
+                       modem_debug.symbols,
+                       modem_debug.bits,
+                       modem_debug.ones,
+                       modem_debug.zeros,
+                       modem_debug.delims,
+                       modem_debug.chars,
+                       modem_debug.unknown,
+                       audio_debug.sai_error,
+                       audio_debug.dma_error,
+                       audio_debug.dma_ndtr);
+                last_diag_blocks = audio_debug.read_blocks;
+
+                if (!audio_started || audio_debug.read_blocks == 0U ||
+                    (last_audio_block_tick != 0U && (uint32_t)(now - last_audio_block_tick) > 3000U)) {
+                    snprintf(diag_line, sizeof(diag_line),
+                             "DMA h:%lu f:%lu err:%lu ndtr:%lu",
+                             audio_debug.half_callbacks,
+                             audio_debug.full_callbacks,
+                             audio_debug.error_callbacks,
+                             audio_debug.dma_ndtr);
+                    display_status(audio_started ? "Waiting for audio DMA" : "Audio init failed", diag_line);
+                }
+            }
             display_task();
             continue;
         }
 
-        size_t got = psk_modem_process(&g_modem, samples, count, decoded, sizeof(decoded));
-        if (got > 0) {
-            size_t old = strlen(g_text);
-            if (old + got >= sizeof(g_text)) {
-                memmove(g_text, g_text + sizeof(g_text) / 2, sizeof(g_text) / 2);
-                g_text[sizeof(g_text) / 2] = '\0';
-                old = strlen(g_text);
+        last_audio_block_tick = HAL_GetTick();
+
+        const uint8_t audio_active = block_abs_avg(samples, count) >= AUDIO_ACTIVE_START_ABS_AVG;
+#if PCM_DUMP_ENABLE
+        pcm_dump_collect(samples, count, audio_active);
+#endif
+        if (audio_active) {
+            if (!decoder_active) {
+                psk_modem_set_mode(&g_modem, psk_modem_mode(&g_modem));
             }
-            strncat(g_text, decoded, sizeof(g_text) - old - 1);
+            active_hold_blocks = AUDIO_ACTIVE_HOLD_BLOCKS;
+            decoder_active = 1U;
+        } else if (active_hold_blocks > 0U) {
+            --active_hold_blocks;
+        } else if (decoder_active) {
+            psk_modem_set_mode(&g_modem, psk_modem_mode(&g_modem));
+            decoder_active = 0U;
         }
 
-        spectrum_analyze(samples, count, AUDIO_INPUT_DECODE_RATE_HZ, &spectrum);
-        display_render(&spectrum, psk_modem_mode_name(psk_modem_mode(&g_modem)),
-                       psk_modem_tone_hz(&g_modem), g_text);
+        if (audio_active || active_hold_blocks > 0U) {
+            size_t got = psk_modem_process(&g_modem, samples, count, decoded, sizeof(decoded));
+            if (got > 0) {
+                print_rx_text("rx31", decoded, got);
+                size_t old = strlen(g_text);
+                if (old + got >= sizeof(g_text)) {
+                    memmove(g_text, g_text + sizeof(g_text) / 2, sizeof(g_text) / 2);
+                    g_text[sizeof(g_text) / 2] = '\0';
+                    old = strlen(g_text);
+                }
+                strncat(g_text, decoded, sizeof(g_text) - old - 1);
+            }
+        }
+
+        uint32_t now = HAL_GetTick();
+        if ((uint32_t)(now - last_render_tick) >= 500U) {
+            last_render_tick = now;
+            spectrum_analyze(samples, count, AUDIO_INPUT_DECODE_RATE_HZ, &spectrum);
+            display_render(&spectrum, psk_modem_mode_name(psk_modem_mode(&g_modem)),
+                           psk_modem_tone_hz(&g_modem), g_text);
+        }
+
+        if ((uint32_t)(now - last_diag_tick) >= 2000U) {
+            last_diag_tick = now;
+            audio_input_debug_snapshot(&audio_debug);
+            psk_modem_debug_snapshot(&g_modem, &modem_debug);
+            printf("[diag] audio h=%lu f=%lu err=%lu blocks=%lu(+%lu) q=%lu maxq=%lu ovf=%lu empty=%lu count=%lu lane=%u min=%d max=%d abs_avg=%u raw0=%d/%d/%u raw1=%d/%d/%u peak=%dHz psk sq=%d/%d open=%d stable=%d warm=%d sym=%lu bits=%lu 1/0=%lu/%lu delim=%lu chars=%lu unk=%lu sai_err=0x%08lx dma_err=0x%08lx ndtr=%lu\r\n",
+                   audio_debug.half_callbacks,
+                   audio_debug.full_callbacks,
+                   audio_debug.error_callbacks,
+                   audio_debug.read_blocks,
+                   audio_debug.read_blocks - last_diag_blocks,
+                   audio_debug.queued_blocks,
+                   audio_debug.max_queued_blocks,
+                   audio_debug.overflow_blocks,
+                   audio_debug.empty_reads,
+                   audio_debug.last_count,
+                   audio_debug.selected_lane,
+                   audio_debug.last_min,
+                   audio_debug.last_max,
+                   audio_debug.last_abs_avg,
+                   audio_debug.raw_min[0],
+                   audio_debug.raw_max[0],
+                   audio_debug.raw_abs_avg[0],
+                   audio_debug.raw_min[1],
+                   audio_debug.raw_max[1],
+                   audio_debug.raw_abs_avg[1],
+                   spectrum.peak_hz,
+                   modem_debug.sq_level,
+                   modem_debug.sq_thresh,
+                   modem_debug.sq_open,
+                   modem_debug.stable_symbols,
+                   modem_debug.warmup_symbols,
+                   modem_debug.symbols,
+                   modem_debug.bits,
+                   modem_debug.ones,
+                   modem_debug.zeros,
+                   modem_debug.delims,
+                   modem_debug.chars,
+                   modem_debug.unknown,
+                   audio_debug.sai_error,
+                   audio_debug.dma_error,
+                   audio_debug.dma_ndtr);
+            last_diag_blocks = audio_debug.read_blocks;
+        }
     }
 }
+
+static void print_rx_text(const char *tag, const char *text, size_t len)
+{
+    printf("[%s] ", tag ? tag : "rx");
+    for (size_t i = 0; i < len; ++i) {
+        const unsigned char c = (unsigned char)text[i];
+        if (c == '\r') {
+            printf("\\r");
+        } else if (c == '\n') {
+            printf("\\n");
+        } else if (c == '\t') {
+            printf("\\t");
+        } else if (c == '\\') {
+            printf("\\\\");
+        } else if (c >= 32U && c <= 126U) {
+            putchar(c);
+        } else {
+            printf("\\x%02X", c);
+        }
+    }
+    printf("\r\n");
+}
+
+static uint32_t block_abs_avg(const int16_t *samples, size_t count)
+{
+    uint32_t sum = 0;
+    if (!samples || count == 0U) {
+        return 0;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const int16_t v = samples[i];
+        sum += (uint32_t)(v < 0 ? -((int32_t)v) : v);
+    }
+    return sum / (uint32_t)count;
+}
+
+#if PCM_DUMP_ENABLE
+static void pcm_dump_collect(const int16_t *samples, size_t count, uint8_t audio_active)
+{
+    static uint8_t armed = 1U;
+    static uint8_t collecting;
+    static uint32_t stored;
+
+    if (!armed || !samples || count == 0U) {
+        return;
+    }
+
+    if (!collecting) {
+        if (!audio_active) {
+            return;
+        }
+        collecting = 1U;
+        stored = 0U;
+        printf("[pcm16] begin rate=%u samples=%u format=s16le trigger=audio\r\n",
+               AUDIO_INPUT_DECODE_RATE_HZ, PCM_DUMP_SAMPLES);
+    }
+
+    size_t copy = count;
+    if (copy > (PCM_DUMP_SAMPLES - stored)) {
+        copy = PCM_DUMP_SAMPLES - stored;
+    }
+    memcpy(&g_pcm_dump[stored], samples, copy * sizeof(g_pcm_dump[0]));
+    stored += (uint32_t)copy;
+
+    if (stored >= PCM_DUMP_SAMPLES) {
+        armed = 0U;
+        collecting = 0U;
+        pcm_dump_print();
+    }
+}
+
+static void pcm_dump_print(void)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    char line[PCM_DUMP_LINE_SAMPLES * 4U + 1U];
+
+    for (uint32_t i = 0; i < PCM_DUMP_SAMPLES; i += PCM_DUMP_LINE_SAMPLES) {
+        uint32_t pos = 0U;
+        for (uint32_t j = 0; j < PCM_DUMP_LINE_SAMPLES && (i + j) < PCM_DUMP_SAMPLES; ++j) {
+            const uint16_t v = (uint16_t)g_pcm_dump[i + j];
+            line[pos++] = hex[(v >> 12) & 0x0fU];
+            line[pos++] = hex[(v >> 8) & 0x0fU];
+            line[pos++] = hex[(v >> 4) & 0x0fU];
+            line[pos++] = hex[v & 0x0fU];
+        }
+        line[pos] = '\0';
+        printf("[pcm16] data %s\r\n", line);
+    }
+    printf("[pcm16] end\r\n");
+}
+#endif
 
 void SystemClock_Config(void)
 {
@@ -200,15 +444,15 @@ static void MX_SAI1_Init(void)
     hsai_BlockA1.Init.MonoStereoMode = SAI_STEREOMODE;
     hsai_BlockA1.Init.CompandingMode = SAI_NOCOMPANDING;
     hsai_BlockA1.Init.TriState = SAI_OUTPUT_NOTRELEASED;
-    hsai_BlockA1.FrameInit.FrameLength = 64;
-    hsai_BlockA1.FrameInit.ActiveFrameLength = 32;
+    hsai_BlockA1.FrameInit.FrameLength = 32;
+    hsai_BlockA1.FrameInit.ActiveFrameLength = 16;
     hsai_BlockA1.FrameInit.FSDefinition = SAI_FS_CHANNEL_IDENTIFICATION;
     hsai_BlockA1.FrameInit.FSPolarity = SAI_FS_ACTIVE_LOW;
     hsai_BlockA1.FrameInit.FSOffset = SAI_FS_BEFOREFIRSTBIT;
     hsai_BlockA1.SlotInit.FirstBitOffset = 0;
     hsai_BlockA1.SlotInit.SlotSize = SAI_SLOTSIZE_DATASIZE;
-    hsai_BlockA1.SlotInit.SlotNumber = 4;
-    hsai_BlockA1.SlotInit.SlotActive = SAI_SLOTACTIVE_0 | SAI_SLOTACTIVE_2;
+    hsai_BlockA1.SlotInit.SlotNumber = 2;
+    hsai_BlockA1.SlotInit.SlotActive = SAI_SLOTACTIVE_0 | SAI_SLOTACTIVE_1;
     if (HAL_SAI_Init(&hsai_BlockA1) != HAL_OK) {
         Error_Handler();
     }

@@ -104,6 +104,13 @@ target_sources(${PROJECT_NAME} PRIVATE
     ${HAL_SRC}
 )
 
+set_source_files_properties(
+    app/dsp/spectrum.c
+    app/platform/audio_input.c
+    third_party/psk_rtty/psk_rtty.c
+    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>"
+)
+
 target_link_options(${PROJECT_NAME} PRIVATE
     -T${CMAKE_SOURCE_DIR}/STM32F769xx_FLASH.ld
     -Wl,-Map=${PROJECT_NAME}.map
@@ -114,6 +121,14 @@ target_link_options(${PROJECT_NAME} PRIVATE
 
 target_link_libraries(${PROJECT_NAME} PRIVATE lvgl m)
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${PROJECT_NAME}>
+get_filename_component(TOOLCHAIN_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+find_program(ARM_SIZE_TOOL
+    NAMES ${CMAKE_SIZE} arm-none-eabi-size starm-size
+    HINTS "${TOOLCHAIN_BIN_DIR}"
 )
+
+if(ARM_SIZE_TOOL)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${ARM_SIZE_TOOL} $<TARGET_FILE:${PROJECT_NAME}>
+    )
+endif()

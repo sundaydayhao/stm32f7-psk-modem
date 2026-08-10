@@ -11,6 +11,21 @@ cmake --preset gcc-arm-debug
 cmake --build --preset debug
 ```
 
+## Flashing
+
+Use the local STM32CubeProgrammer installation:
+
+```powershell
+C:\ProgramData\STM32CubeProgrammer\bin\STM32CubeProgrammer.exe
+C:\ProgramData\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe
+```
+
+For command-line flashing over ST-LINK:
+
+```powershell
+C:\ProgramData\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe -c port=SWD -w build\debug\stm32f769i_disco_psk_modem.elf -v -rst
+```
+
 The build is independent of Zephyr, ESP-IDF, and the ESP32 reference project. The reference code reused here is the platform-neutral PSK/RTTY decoder core from `esp32s3-psk-modem`.
 
 ## Notes

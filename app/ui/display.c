@@ -25,6 +25,9 @@
 #define VBP 34U
 #define VFP 34U
 
+#define WATERFALL_WIDTH 764U
+#define WATERFALL_HEIGHT 166U
+
 static DSI_HandleTypeDef *g_hdsi;
 static lv_disp_draw_buf_t g_draw_buf;
 static lv_color_t g_line_buf[DISPLAY_WIDTH * 40U];
@@ -36,7 +39,9 @@ static lv_obj_t *g_mode;
 static lv_obj_t *g_tone;
 static lv_obj_t *g_peak;
 static lv_obj_t *g_decoded;
-static lv_obj_t *g_bars[SPECTRUM_BINS];
+static lv_obj_t *g_waterfall;
+static lv_color_t *g_waterfall_buf = (lv_color_t *)(DISPLAY_FRAMEBUFFER + (DISPLAY_WIDTH * DISPLAY_HEIGHT * 2U));
+static uint8_t g_waterfall_line[WATERFALL_WIDTH];
 
 static void lv_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p)
 {
@@ -75,6 +80,67 @@ static lv_obj_t *make_panel(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coo
     return panel;
 }
 
+static uint32_t lerp_u8(uint32_t a, uint32_t b, uint32_t t)
+{
+    return ((a * (255U - t)) + (b * t)) / 255U;
+}
+
+static lv_color_t waterfall_color(uint8_t level)
+{
+    static const uint32_t stops[] = {
+        0x070A0FU,
+        0x10223DU,
+        0x124C6FU,
+        0x1E8A5AU,
+        0xD6B13DU,
+        0xF97316U,
+    };
+    const uint32_t segments = (uint32_t)(sizeof(stops) / sizeof(stops[0]) - 1U);
+    const uint32_t scaled = (uint32_t)level * segments;
+    uint32_t idx = scaled / 255U;
+    uint32_t frac = scaled % 255U;
+    if (idx >= segments) {
+        idx = segments - 1U;
+        frac = 255U;
+    }
+
+    const uint32_t a = stops[idx];
+    const uint32_t b = stops[idx + 1U];
+    const uint32_t r = lerp_u8((a >> 16) & 0xffU, (b >> 16) & 0xffU, frac);
+    const uint32_t g = lerp_u8((a >> 8) & 0xffU, (b >> 8) & 0xffU, frac);
+    const uint32_t bl = lerp_u8(a & 0xffU, b & 0xffU, frac);
+    return lv_color_hex((r << 16) | (g << 8) | bl);
+}
+
+static uint8_t interp_bin(const spectrum_t *spectrum, uint32_t x)
+{
+    const uint32_t scaled = (x * (SPECTRUM_BINS - 1U) * 256U) / (WATERFALL_WIDTH - 1U);
+    uint32_t bin = scaled / 256U;
+    uint32_t frac = scaled & 0xffU;
+    if (bin >= SPECTRUM_BINS - 1U) {
+        return spectrum->bins[SPECTRUM_BINS - 1U];
+    }
+    uint32_t a = spectrum->bins[bin];
+    uint32_t b = spectrum->bins[bin + 1U];
+    return (uint8_t)(((a * (256U - frac)) + (b * frac)) / 256U);
+}
+
+static void waterfall_push(const spectrum_t *spectrum)
+{
+    memmove(&g_waterfall_buf[WATERFALL_WIDTH],
+            &g_waterfall_buf[0],
+            (WATERFALL_HEIGHT - 1U) * WATERFALL_WIDTH * sizeof(g_waterfall_buf[0]));
+
+    for (uint32_t x = 0; x < WATERFALL_WIDTH; ++x) {
+        uint32_t level = interp_bin(spectrum, x);
+        level = ((uint32_t)g_waterfall_line[x] * 3U + level * 2U) / 5U;
+        g_waterfall_line[x] = (uint8_t)level;
+        g_waterfall_buf[x] = waterfall_color((uint8_t)level);
+    }
+
+    lv_obj_invalidate(g_waterfall);
+}
+
 static void create_ui(void)
 {
     g_screen = lv_obj_create(NULL);
@@ -99,23 +165,11 @@ static void create_ui(void)
     lv_obj_set_pos(g_peak, 360, 18);
 
     lv_obj_t *spectrum_panel = make_panel(g_screen, 18, 144, 764, 166);
-    const lv_coord_t bar_w = 8;
-    const lv_coord_t gap = 4;
-    const lv_coord_t x0 = 15;
-    for (int i = 0; i < SPECTRUM_BINS; ++i) {
-        lv_obj_t *bar = lv_bar_create(spectrum_panel);
-        lv_obj_set_size(bar, bar_w, 132);
-        lv_obj_set_pos(bar, x0 + i * (bar_w + gap), 17);
-        lv_bar_set_range(bar, 0, 255);
-        lv_bar_set_value(bar, 0, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(0x26313AU), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(bar, 2, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(C_WARN), LV_PART_INDICATOR);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
-        lv_obj_set_style_radius(bar, 2, LV_PART_INDICATOR);
-        g_bars[i] = bar;
-    }
+    g_waterfall = lv_canvas_create(spectrum_panel);
+    lv_obj_set_pos(g_waterfall, 0, 0);
+    lv_canvas_set_buffer(g_waterfall, g_waterfall_buf,
+                         WATERFALL_WIDTH, WATERFALL_HEIGHT, LV_IMG_CF_TRUE_COLOR);
+    lv_canvas_fill_bg(g_waterfall, lv_color_hex(0x111827U), LV_OPA_COVER);
 
     lv_obj_t *text_panel = make_panel(g_screen, 18, 328, 764, 134);
     g_decoded = make_label(text_panel, &lv_font_montserrat_16, lv_color_hex(C_TEXT));
@@ -196,12 +250,7 @@ void display_render(const spectrum_t *spectrum, const char *mode, int tone_hz, c
     snprintf(text, sizeof(text), "Peak %d Hz", spectrum->peak_hz);
     lv_label_set_text(g_peak, text);
 
-    for (int i = 0; i < SPECTRUM_BINS; ++i) {
-        lv_bar_set_value(g_bars[i], spectrum->bins[i], LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(g_bars[i],
-                                  lv_color_hex(i == spectrum->peak_bin ? C_ACCENT : C_WARN),
-                                  LV_PART_INDICATOR);
-    }
+    waterfall_push(spectrum);
 
     lv_label_set_text(g_decoded, decoded && decoded[0] ? decoded : "Waiting for PSK signal");
     display_task();

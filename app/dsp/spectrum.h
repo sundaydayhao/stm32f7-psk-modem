@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SPECTRUM_BINS 64
+#define SPECTRUM_BINS 128
 #define SPECTRUM_MAX_SAMPLES 256
 
 typedef struct {

@@ -1,0 +1,33 @@
+[audio] wm8994 id before reset 0x8994
+[audio] wm8994 line-in register init ok
+[audio] wm8994 r0000 st=0 val=0x8994
+[audio] wm8994 r0001 st=0 val=0x0013
+[audio] wm8994 r0002 st=0 val=0x6350
+[audio] wm8994 r0004 st=0 val=0x0303
+[audio] wm8994 r0018 st=0 val=0x008b
+[audio] wm8994 r001a st=0 val=0x008b
+[audio] wm8994 r0028 st=0 val=0x0011
+[audio] wm8994 r0029 st=0 val=0x0025
+[audio] wm8994 r002a st=0 val=0x0025
+[audio] wm8994 r0210 st=0 val=0x0083
+[audio] wm8994 r0300 st=0 val=0x4010
+[audio] wm8994 r0440 st=0 val=0x00db
+[audio] wm8994 r0606 st=0 val=0x0002
+[audio] wm8994 r0607 st=0 val=0x0002
+[audio] pre dma sai_state=1 sai_lock=0 hdmarx=0x20000ddc dma_state=1 dma_lock=0 dma_inst=0x40026470 size=1536 cr=0x02032d00 ndtr=0
+[audio] sai rx dma start st=0 sai_state=34 dma_state=2 sai_err=0x00000000 dma_err=0x00000000 cr=0x02032d1f ndtr=1536
+[boot] audio capture started
+[diag] audio h=8 f=8 err=0 blocks=16(+16) q=15 maxq=15 ovf=0 empty=0 count=128 lane=0 min=-5100 max=5626 abs_avg=3051 raw0=-5271/5985/3088 raw1=-5063/6174/3095 peak=752Hz psk sq=0/5 open=0 stable=0 warm=31 sym=1 bits=0 1/0=0/0 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=1048
+[diag] idle h=64 f=64 err=0 blocks=128(+112) q=0 maxq=19 ovf=0 empty=151871 count=128 lane=0 min=-5429 max=4822 abs_avg=2988 raw0=-5600/5185/3024 raw1=-5393/5373/3013 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=62 bits=30 1/0=14/16 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=877
+[diag] audio h=128 f=128 err=0 blocks=256(+128) q=0 maxq=19 ovf=0 empty=304561 count=128 lane=0 min=-5193 max=4880 abs_avg=3050 raw0=-5488/5065/3093 raw1=-5276/5259/3087 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=125 bits=93 1/0=35/58 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=1510
+[diag] idle h=192 f=191 err=0 blocks=383(+127) q=0 maxq=19 ovf=0 empty=456967 count=128 lane=0 min=-5086 max=5010 abs_avg=3168 raw0=-5378/5351/3203 raw1=-5169/5544/3198 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=187 bits=155 1/0=51/104 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=637
+[diag] idle h=255 f=255 err=0 blocks=510(+127) q=0 maxq=19 ovf=0 empty=609389 count=128 lane=0 min=-4799 max=4768 abs_avg=2557 raw0=-5151/5098/2597 raw1=-4944/5288/2591 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=248 bits=216 1/0=62/154 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=1285
+[diag] idle h=319 f=318 err=0 blocks=637(+127) q=0 maxq=19 ovf=0 empty=761772 count=128 lane=0 min=-4999 max=4885 abs_avg=3053 raw0=-5305/5204/3085 raw1=-5099/5397/3081 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=310 bits=278 1/0=75/203 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=396
+[diag] idle h=382 f=382 err=0 blocks=764(+127) q=0 maxq=19 ovf=0 empty=914074 count=128 lane=0 min=-5256 max=4984 abs_avg=3041 raw0=-5628/5196/3078 raw1=-5423/5385/3079 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=372 bits=340 1/0=85/255 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=1044
+[diag] idle h=446 f=445 err=0 blocks=891(+127) q=0 maxq=19 ovf=0 empty=1065872 count=128 lane=0 min=-4878 max=4838 abs_avg=3050 raw0=-5193/5131/3086 raw1=-4986/5322/3086 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=434 bits=402 1/0=94/308 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=156
+[diag] idle h=509 f=509 err=0 blocks=1018(+127) q=0 maxq=19 ovf=0 empty=1218083 count=128 lane=0 min=-5526 max=5122 abs_avg=3223 raw0=-5687/5505/3264 raw1=-5480/5694/3259 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=497 bits=465 1/0=111/354 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=804
+[diag] idle h=573 f=573 err=0 blocks=1146(+128) q=0 maxq=19 ovf=0 empty=1370078 count=128 lane=0 min=-4921 max=4914 abs_avg=2835 raw0=-5202/5290/2866 raw1=-4994/5484/2863 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=559 bits=527 1/0=125/402 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=1451
+[diag] idle h=637 f=636 err=0 blocks=1273(+127) q=0 maxq=19 ovf=0 empty=1522055 count=128 lane=0 min=-5051 max=4926 abs_avg=3128 raw0=-5359/5225/3171 raw1=-5154/5415/3171 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=621 bits=589 1/0=134/455 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=563
+[diag] idle h=700 f=700 err=0 blocks=1400(+127) q=0 maxq=19 ovf=0 empty=1674317 count=128 lane=0 min=-2301 max=2046 abs_avg=682 raw0=-2471/2415/715 raw1=-2273/2614/732 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=683 bits=651 1/0=141/510 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=1211
+[diag] idle h=764 f=763 err=0 blocks=1527(+127) q=0 maxq=19 ovf=0 empty=1826022 count=128 lane=0 min=-5043 max=4886 abs_avg=3149 raw0=-5304/5171/3187 raw1=-5099/5364/3185 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=745 bits=713 1/0=151/562 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=323
+[diag] idle h=827 f=827 err=0 blocks=1654(+127) q=0 maxq=19 ovf=0 empty=1978134 count=128 lane=0 min=-5355 max=4853 abs_avg=3056 raw0=-5691/5140/3090 raw1=-5484/5329/3087 peak=752Hz psk sq=0/5 open=0 stable=0 warm=0 sym=807 bits=775 1/0=159/616 delim=0 chars=0 unk=0 sai_err=0x00000000 dma_err=0x00000000 ndtr=970

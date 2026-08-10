@@ -46,12 +46,12 @@
 #define LV_USE_TABVIEW 0
 #define LV_USE_TILEVIEW 0
 #define LV_USE_WIN 0
-#define LV_USE_IMG 0
+#define LV_USE_IMG 1
 #define LV_USE_LINE 0
 #define LV_USE_ARC 0
 #define LV_USE_TABLE 0
 #define LV_USE_TEXTAREA 0
-#define LV_USE_CANVAS 0
+#define LV_USE_CANVAS 1
 #define LV_USE_KEYBOARD 0
 #define LV_USE_SPINNER 0
 

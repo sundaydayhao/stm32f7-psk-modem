@@ -69,6 +69,27 @@ const char *psk_modem_mode_name(psk_mode_t mode)
     return mode == PSK_MODE_PSK63 ? "PSK63" : "BPSK31";
 }
 
+void psk_modem_debug_snapshot(const psk_modem_t *m, psk_modem_debug_t *debug)
+{
+    if (!debug) {
+        return;
+    }
+
+    debug->symbols = m->rx.debug_symbols;
+    debug->bits = m->rx.debug_bits;
+    debug->ones = m->rx.debug_ones;
+    debug->zeros = m->rx.debug_zeros;
+    debug->delims = m->rx.debug_delims;
+    debug->chars = m->rx.debug_chars;
+    debug->unknown = m->rx.debug_unknown;
+    debug->sq_open = m->rx.sq_open;
+    debug->sq_level = m->rx.sq_level;
+    debug->sq_thresh = m->rx.sq_thresh;
+    debug->stable_symbols = m->rx.sq_stable_symbols;
+    debug->warmup_symbols = m->rx.warmup_symbols;
+    debug->tone_hz = m->rx.config.rx_tone_hz;
+}
+
 size_t psk_modem_process(psk_modem_t *m, const int16_t *samples, size_t count,
                          char *out, size_t out_size)
 {

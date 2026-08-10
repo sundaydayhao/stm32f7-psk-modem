@@ -252,6 +252,52 @@ static void finish_symbol(psk_rtty_rx_t *rx)
     rx->samples_in_symbol = 0;
 }
 
+static void finish_simple_bpsk_symbol(psk_rtty_rx_t *rx)
+{
+    if (rx->samples_in_symbol == 0) {
+        return;
+    }
+
+    const float i = rx->i_acc;
+    const float q = rx->q_acc;
+    const float mag = sqrtf(i * i + q * q) / (float)rx->samples_in_symbol;
+
+    if (mag > rx->agc_ave) {
+        rx->agc_ave = (1.0f - 1.0f / 50.0f) * rx->agc_ave + (1.0f / 50.0f) * mag;
+    } else {
+        rx->agc_ave = (1.0f - 1.0f / 200.0f) * rx->agc_ave + (1.0f / 200.0f) * mag;
+    }
+    rx->sq_level = rx->agc_ave > 50.0f ? 99 : 0;
+    rx->sq_open = rx->sq_level >= rx->sq_thresh;
+    if (rx->sq_open && rx->sq_stable_symbols < SQ_EMIT_STABLE_SYMBOLS) {
+        rx->sq_stable_symbols++;
+    }
+
+    if (rx->debug_symbols > 0) {
+        const float dot = rx->i0 * i + rx->q0 * q;
+        const int bit = dot < 0.0f;
+
+        if (rx->warmup_symbols > 0) {
+            rx->warmup_symbols--;
+        } else {
+            rx->debug_bits++;
+            if (bit) {
+                rx->debug_ones++;
+            } else {
+                rx->debug_zeros++;
+            }
+            push_varicode_bit(rx, bit);
+        }
+    }
+
+    rx->i0 = i;
+    rx->q0 = q;
+    rx->debug_symbols++;
+    rx->i_acc = 0.0f;
+    rx->q_acc = 0.0f;
+    rx->samples_in_symbol = 0;
+}
+
 static psk_rtty_complex_t fir_complex(const psk_rtty_complex_t *queue, int newest, int length, const float *coef)
 {
     psk_rtty_complex_t acc = {0.0f, 0.0f};
@@ -520,7 +566,7 @@ static void decode_bpsk_symbol(psk_rtty_rx_t *rx, psk_rtty_complex_t sample)
     push_varicode_bit(rx, bit);
 }
 
-static void pskcore_rx_feed(psk_rtty_rx_t *rx, const int16_t *samples, size_t count)
+static void __attribute__((unused)) pskcore_rx_feed(psk_rtty_rx_t *rx, const int16_t *samples, size_t count)
 {
     if (rx->afc_timer > 0 && --rx->afc_timer <= 0) {
         rx->afc_timer = 0;
@@ -582,10 +628,48 @@ static void pskcore_rx_feed(psk_rtty_rx_t *rx, const int16_t *samples, size_t co
     rx->sample_count %= 16;
 }
 
+static void simple_bpsk_rx_feed(psk_rtty_rx_t *rx, const int16_t *samples, size_t count)
+{
+    const float phase_inc = TWO_PI * (float)rx->config.rx_tone_hz / (float)rx->config.sample_rate_hz;
+    const int initial_skip = (int)(rx->symbol_period_samples * 5.0f);
+    const int window_start = (int)(rx->symbol_period_samples * 0.13f);
+    const int window_end = (int)(rx->symbol_period_samples * 0.87f);
+
+    for (size_t n = 0; n < count; ++n) {
+        const float s = (float)samples[n];
+        const float c = cosf(rx->nco_phase);
+        const float si = sinf(rx->nco_phase);
+
+        rx->nco_phase += phase_inc;
+        if (rx->nco_phase >= TWO_PI) {
+            rx->nco_phase -= TWO_PI;
+        }
+
+        if (rx->sample_count < initial_skip) {
+            rx->sample_count++;
+            continue;
+        }
+
+        if (rx->bit_pos >= window_start && rx->bit_pos < window_end) {
+            rx->i_acc += s * c;
+            rx->q_acc -= s * si;
+            rx->samples_in_symbol++;
+        }
+        rx->bit_pos++;
+
+        rx->symbol_clock += 1.0f;
+        if (rx->symbol_clock >= rx->symbol_period_samples) {
+            rx->symbol_clock -= rx->symbol_period_samples;
+            finish_simple_bpsk_symbol(rx);
+            rx->bit_pos = 0;
+        }
+    }
+}
+
 void psk_rtty_rx_feed(psk_rtty_rx_t *rx, const int16_t *samples, size_t count)
 {
     if (rx->config.mode == PSK_RTTY_MODE_BPSK31 || rx->config.mode == PSK_RTTY_MODE_PSK63) {
-        pskcore_rx_feed(rx, samples, count);
+        simple_bpsk_rx_feed(rx, samples, count);
         return;
     }
 
